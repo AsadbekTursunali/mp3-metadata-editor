@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from './Header';
 import FileUpload from './FileUpload';
 import CoverImageUpload from './CoverImageUpload';
@@ -10,6 +10,7 @@ import { useTelegramApp } from '../hooks/useTelegramApp';
 import { useLibraryLoader } from '../hooks/useLibraryLoader';
 
 const Mp3MetadataEditor = () => {
+  // State
   const [mp3File, setMp3File] = useState(null);
   const [coverImage, setCoverImage] = useState(null);
   const [title, setTitle] = useState('');
@@ -17,17 +18,18 @@ const Mp3MetadataEditor = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('');
 
+  // Custom hooks
   const { isTelegramApp, sendTelegramData } = useTelegramApp();
-  const { librariesLoaded, ID3Writer, jsmediatags, saveAs } = useLibraryLoader();
+  const { librariesLoaded } = useLibraryLoader();
 
   const handleMp3Upload = async (file) => {
     if (file && file.type === 'audio/mpeg') {
       setMp3File(file);
       setStatus('MP3 file loaded, reading metadata...');
-
+      
       try {
-        if (librariesLoaded) {
-          jsmediatags.read(file, {
+        if (window.jsmediatags && librariesLoaded) {
+          window.jsmediatags.read(file, {
             onSuccess: (tag) => {
               const tags = tag.tags;
               const existingTitle = tags.title || file.name.replace('.mp3', '');
@@ -35,7 +37,8 @@ const Mp3MetadataEditor = () => {
               if (!title) setTitle(existingTitle);
               setStatus('MP3 file loaded successfully with metadata');
             },
-            onError: () => {
+            onError: (error) => {
+              console.log('Metadata read error:', error);
               const fileName = file.name.replace('.mp3', '');
               setOriginalTitle(fileName);
               if (!title) setTitle(fileName);
@@ -48,7 +51,7 @@ const Mp3MetadataEditor = () => {
           if (!title) setTitle(fileName);
           setStatus('MP3 file loaded successfully');
         }
-
+        
         sendTelegramData({
           action: 'file_uploaded',
           filename: file.name,
@@ -77,6 +80,7 @@ const Mp3MetadataEditor = () => {
       setStatus('Please upload an MP3 file first');
       return;
     }
+
     if (!librariesLoaded) {
       setStatus('Please wait for libraries to load, then try again');
       return;
@@ -86,26 +90,47 @@ const Mp3MetadataEditor = () => {
     setStatus('Processing file...');
 
     try {
+      if (!window.ID3Writer) {
+        throw new Error('ID3Writer library not loaded');
+      }
+
       const arrayBuffer = await mp3File.arrayBuffer();
-      const writer = new ID3Writer(arrayBuffer);
-
-      if (title.trim()) writer.setFrame('TIT2', title.trim());
-
+      const writer = new window.ID3Writer(arrayBuffer);
+      
+      if (title.trim()) {
+        writer.setFrame('TIT2', title.trim());
+      }
+      
       if (coverImage) {
         const imageBuffer = await coverImage.arrayBuffer();
+        const imageUint8Array = new Uint8Array(imageBuffer);
         writer.setFrame('APIC', {
           type: 3,
-          data: new Uint8Array(imageBuffer),
+          data: imageUint8Array,
           description: 'Cover',
           useUnicodeEncoding: false
         });
       }
-
+      
       writer.addTag();
-      const blob = writer.getBlob();
-      saveAs(blob, `${title || 'edited'}.mp3`);
-
+      const taggedSongBuffer = writer.getBlob();
+      const blob = new Blob([taggedSongBuffer], { type: 'audio/mpeg' });
+      
+      if (window.saveAs) {
+        window.saveAs(blob, `${title || 'edited'}.mp3`);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${title || 'edited'}.mp3`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+      
       setStatus('File processed and downloaded successfully!');
+      
       sendTelegramData({
         action: 'file_processed',
         title: title,
@@ -116,9 +141,11 @@ const Mp3MetadataEditor = () => {
       if (isTelegramApp && window.Telegram?.WebApp) {
         window.Telegram.WebApp.showAlert('MP3 file processed successfully!');
       }
+      
     } catch (error) {
       console.error('Processing error:', error);
       setStatus('Error processing file: ' + error.message);
+      
       sendTelegramData({
         action: 'file_processed',
         success: false,
@@ -135,7 +162,7 @@ const Mp3MetadataEditor = () => {
     setTitle('');
     setOriginalTitle('');
     setStatus('');
-
+    
     sendTelegramData({
       action: 'reset_form'
     });
@@ -144,18 +171,37 @@ const Mp3MetadataEditor = () => {
   return (
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-2xl mx-auto">
-        <Header isTelegramApp={isTelegramApp} librariesLoaded={librariesLoaded} />
-        <FileUpload mp3File={mp3File} onMp3Upload={handleMp3Upload} />
-        <CoverImageUpload coverImage={coverImage} onImageUpload={handleImageUpload} />
-        <TitleEditor title={title} originalTitle={originalTitle} onTitleChange={setTitle} />
+        <Header 
+          isTelegramApp={isTelegramApp} 
+          librariesLoaded={librariesLoaded} 
+        />
+        
+        <FileUpload 
+          mp3File={mp3File}
+          onMp3Upload={handleMp3Upload}
+        />
+        
+        <CoverImageUpload 
+          coverImage={coverImage}
+          onImageUpload={handleImageUpload}
+        />
+        
+        <TitleEditor 
+          title={title}
+          originalTitle={originalTitle}
+          onTitleChange={setTitle}
+        />
+        
         <StatusMessage status={status} />
-        <ActionButtons
+        
+        <ActionButtons 
           mp3File={mp3File}
           isProcessing={isProcessing}
           librariesLoaded={librariesLoaded}
           onProcess={processFile}
           onReset={resetAll}
         />
+        
         <Instructions />
       </div>
     </div>
