@@ -22,11 +22,11 @@ export const useLibraryLoader = () => {
     const loadLibraries = async () => {
       try {
         await loadScript(
-          'https://cdnjs.cloudflare.com/ajax/libs/browser-id3-writer/4.4.0/browser-id3-writer.min.js',
+          'https://cdn.jsdelivr.net/npm/browser-id3-writer@4.4.0/dist/browser-id3-writer.min.js',
           'ID3Writer'
         );
         await loadScript(
-          'https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js',
+          'https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js',
           'jsmediatags'
         );
         setLibrariesLoaded(true);
