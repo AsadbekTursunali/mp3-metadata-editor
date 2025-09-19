@@ -7,8 +7,9 @@ const Instructions = () => {
       <ol className="text-sm text-blue-800 space-y-1">
         <li>1. Upload your MP3 file</li>
         <li>2. (Optional) Upload a new cover image</li>
-        <li>3. Edit the song title</li>
-        <li>4. Click "Apply & Download" to get your updated MP3</li>
+        <li>3. Edit the artist name</li>
+        <li>4. Edit the album name</li>
+        <li>5. Click "Apply & Download" to get your updated MP3</li>
       </ol>
     </div>
   );
