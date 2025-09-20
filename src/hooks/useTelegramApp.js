@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 export const useTelegramApp = () => {
   const [isTelegramApp, setIsTelegramApp] = useState(false);
   const [user, setUser] = useState(null);
+  const [chatId, setChatId] = useState(null);
 
   useEffect(() => {
     if (window.Telegram && window.Telegram.WebApp) {
@@ -14,42 +15,64 @@ export const useTelegramApp = () => {
       tg.setBackgroundColor('#f9fafb');
       tg.enableClosingConfirmation();
 
-      // User ma'lumotlari
-      if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+      if (tg.initDataUnsafe?.user) {
         setUser(tg.initDataUnsafe.user);
+        setChatId(tg.initDataUnsafe.user.id);
       }
 
       console.log('✅ Telegram WebApp initialized');
+      console.log('👤 User:', tg.initDataUnsafe.user);
     }
   }, []);
 
-  // Faqat metadata yuborish
   const sendTelegramData = (data) => {
     if (isTelegramApp && window.Telegram?.WebApp) {
       window.Telegram.WebApp.sendData(JSON.stringify(data));
     } else {
-      console.log('Dev mode - would send:', data);
+      console.log('💻 Dev mode - would send:', data);
     }
   };
 
-  // Faylni backendga yuborish
   const sendFileToBot = async (blob, filename, metadata = {}) => {
-    try {
-      const formData = new FormData();
-      formData.append("file", blob, filename);
-      formData.append("metadata", JSON.stringify(metadata));
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
 
-      const res = await fetch("/upload", {
-        method: "POST",
-        body: formData
-      });
+      reader.onload = () => {
+        try {
+          const base64Data = reader.result.split(',')[1];
 
-      if (!res.ok) throw new Error("Upload failed");
+          const fileData = {
+            action: 'send_processed_file',
+            file: {
+              data: base64Data,
+              filename,
+              mimeType: 'audio/mpeg',
+              size: blob.size
+            },
+            metadata: {
+              artist: metadata.artist || 'Unknown Artist',
+              album: metadata.album || 'Unknown Album',
+              originalFilename: metadata.originalFilename || 'unknown.mp3'
+            },
+            user,
+            timestamp: new Date().toISOString()
+          };
 
-      return { success: true, message: "File sent to backend" };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
+          if (isTelegramApp && window.Telegram?.WebApp) {
+            window.Telegram.WebApp.sendData(JSON.stringify(fileData));
+            resolve({ success: true });
+          } else {
+            console.log('💻 Dev mode - file data:', fileData);
+            resolve({ success: true });
+          }
+        } catch (error) {
+          reject({ success: false, error: error.message });
+        }
+      };
+
+      reader.onerror = () => reject({ success: false, error: 'File read failed' });
+      reader.readAsDataURL(blob);
+    });
   };
 
   const showAlert = (message) => {
@@ -60,11 +83,13 @@ export const useTelegramApp = () => {
     }
   };
 
-  return {
-    isTelegramApp,
-    user,
-    sendTelegramData,
-    sendFileToBot,
-    showAlert
+  const showConfirm = (message, callback) => {
+    if (isTelegramApp && window.Telegram?.WebApp) {
+      window.Telegram.WebApp.showConfirm(message, callback);
+    } else {
+      callback(window.confirm(message));
+    }
   };
+
+  return { isTelegramApp, user, chatId, sendTelegramData, sendFileToBot, showAlert, showConfirm };
 };
