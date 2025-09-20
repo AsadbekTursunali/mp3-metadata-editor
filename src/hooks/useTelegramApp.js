@@ -23,26 +23,43 @@ export const useTelegramApp = () => {
 
   const sendFileToBot = async (blob, filename, metadata = {}) => {
     if (!chatId) return { success: false, message: 'Chat ID missing' };
+    
     const reader = new FileReader();
     return new Promise((resolve, reject) => {
       reader.onload = async () => {
         try {
           const base64Data = reader.result.split(',')[1];
-          const payload = { file: { data: base64Data, filename, size: blob.size }, metadata, chat_id: chatId };
+          const payload = { 
+            file: { 
+              data: base64Data, 
+              filename, 
+              size: blob.size 
+            }, 
+            metadata, 
+            chat_id: chatId 
+          };
+          
           const res = await fetch('/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
+          
           const json = await res.json();
           resolve(json);
         } catch (err) {
           reject(err);
         }
       };
-      reader.onerror = () => reject('File read error');
+      reader.onerror = () => reject(new Error('File read error'));
       reader.readAsDataURL(blob);
     });
+  };
+
+  const sendTelegramData = (data) => {
+    if (window.Telegram?.WebApp) {
+      window.Telegram.WebApp.sendData(JSON.stringify(data));
+    }
   };
 
   const showAlert = (msg) => {
@@ -50,9 +67,20 @@ export const useTelegramApp = () => {
   };
 
   const showConfirm = (msg, cb) => {
-    if (isTelegramApp) window.Telegram.WebApp.showConfirm(msg, cb);
-    else cb(confirm(msg));
+    if (isTelegramApp) {
+      window.Telegram.WebApp.showConfirm(msg, cb);
+    } else {
+      cb(confirm(msg));
+    }
   };
 
-  return { isTelegramApp, user, chatId, sendFileToBot, showAlert, showConfirm };
+  return { 
+    isTelegramApp, 
+    user, 
+    chatId, 
+    sendFileToBot, 
+    sendTelegramData, 
+    showAlert, 
+    showConfirm 
+  };
 };

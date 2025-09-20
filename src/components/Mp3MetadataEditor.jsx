@@ -22,6 +22,8 @@ const Mp3MetadataEditor = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStep, setProcessingStep] = useState('');
   const [status, setStatus] = useState('');
+  const [processedFile, setProcessedFile] = useState(null); // Yangi state
+  const [processedFilename, setProcessedFilename] = useState(''); // Yangi state
 
   // Custom hooks
   const { 
@@ -37,6 +39,7 @@ const Mp3MetadataEditor = () => {
   const handleMp3Upload = async (file) => {
     if (file && file.type === 'audio/mpeg') {
       setMp3File(file);
+      setProcessedFile(null); // Reset processed file
       setStatus('MP3 file loaded, reading metadata...');
       
       try {
@@ -105,79 +108,116 @@ const Mp3MetadataEditor = () => {
       return;
     }
 
-    // Confirm before processing
+    setIsProcessing(true);
+    setStatus('Processing file...');
+
+    try {
+      // Step 1: Check ID3Writer
+      setProcessingStep('Initializing audio processor...');
+      if (!window.ID3Writer) {
+        throw new Error('ID3Writer library not loaded');
+      }
+
+      // Step 2: Read file
+      setProcessingStep('Reading MP3 file...');
+      const arrayBuffer = await mp3File.arrayBuffer();
+      const writer = new window.ID3Writer(arrayBuffer);
+      
+      // Step 3: Set metadata
+      setProcessingStep('Writing metadata...');
+      if (artist.trim()) {
+        writer.setFrame('TPE1', [artist.trim()]);
+      }
+      
+      if (album.trim()) {
+        writer.setFrame('TALB', album.trim());
+      }
+      
+      // Step 4: Process cover image
+      if (coverImage) {
+        setProcessingStep('Processing cover image...');
+        const imageBuffer = await coverImage.arrayBuffer();
+        const imageUint8Array = new Uint8Array(imageBuffer);
+        writer.setFrame('APIC', {
+          type: 3,
+          data: imageUint8Array,
+          description: 'Cover',
+          useUnicodeEncoding: false
+        });
+      }
+      
+      // Step 5: Generate final file
+      setProcessingStep('Generating final MP3...');
+      writer.addTag();
+      const taggedSongBuffer = writer.getBlob();
+      const blob = new Blob([taggedSongBuffer], { type: 'audio/mpeg' });
+      
+      // Step 6: Prepare filename
+      const filename = `${artist || 'Unknown Artist'} - ${album || 'Unknown Album'}.mp3`;
+      
+      // Save processed file to state instead of sending immediately
+      setProcessedFile(blob);
+      setProcessedFilename(filename);
+      setStatus('✅ File processed successfully! Ready to download.');
+      
+      sendTelegramData({
+        action: 'file_processed',
+        artist: artist,
+        album: album,
+        filename: filename,
+        original_filename: mp3File.name,
+        file_size: blob.size,
+        user_id: user?.id,
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error) {
+      console.error('Processing error:', error);
+      const errorMessage = `❌ Error: ${error.message}`;
+      setStatus(errorMessage);
+      showAlert(errorMessage);
+      
+      sendTelegramData({
+        action: 'file_processed_error',
+        error: error.message,
+        user_id: user?.id,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      setIsProcessing(false);
+      setProcessingStep('');
+    }
+  };
+
+  const downloadFile = async () => {
+    if (!processedFile) {
+      showAlert('No processed file available');
+      return;
+    }
+
     showConfirm(
-      `Process and send "${mp3File.name}" to your Telegram chat?`,
+      `Send "${processedFilename}" to your Telegram chat?`,
       async (confirmed) => {
         if (!confirmed) return;
 
-        setIsProcessing(true);
-        setStatus('Processing file...');
+        setStatus('Sending to Telegram...');
 
         try {
-          // Step 1: Check ID3Writer
-          setProcessingStep('Initializing audio processor...');
-          if (!window.ID3Writer) {
-            throw new Error('ID3Writer library not loaded');
-          }
-
-          // Step 2: Read file
-          setProcessingStep('Reading MP3 file...');
-          const arrayBuffer = await mp3File.arrayBuffer();
-          const writer = new window.ID3Writer(arrayBuffer);
-          
-          // Step 3: Set metadata
-          setProcessingStep('Writing metadata...');
-          if (artist.trim()) {
-            writer.setFrame('TPE1', [artist.trim()]);
-          }
-          
-          if (album.trim()) {
-            writer.setFrame('TALB', album.trim());
-          }
-          
-          // Step 4: Process cover image
-          if (coverImage) {
-            setProcessingStep('Processing cover image...');
-            const imageBuffer = await coverImage.arrayBuffer();
-            const imageUint8Array = new Uint8Array(imageBuffer);
-            writer.setFrame('APIC', {
-              type: 3,
-              data: imageUint8Array,
-              description: 'Cover',
-              useUnicodeEncoding: false
-            });
-          }
-          
-          // Step 5: Generate final file
-          setProcessingStep('Generating final MP3...');
-          writer.addTag();
-          const taggedSongBuffer = writer.getBlob();
-          const blob = new Blob([taggedSongBuffer], { type: 'audio/mpeg' });
-          
-          // Step 6: Prepare filename
-          const filename = `${artist || 'Unknown Artist'} - ${album || 'Unknown Album'}.mp3`;
-          
-          // Step 7: Send to Telegram
-          setProcessingStep('Sending to Telegram...');
-          const result = await sendFileToBot(blob, filename, {
+          const result = await sendFileToBot(processedFile, processedFilename, {
             artist: artist,
             album: album,
             originalFilename: mp3File.name
           });
 
           if (result.success) {
-            setStatus('✅ File processed and sent to Telegram successfully!');
+            setStatus('✅ File sent to Telegram successfully!');
             showAlert('🎵 Your processed MP3 has been sent to the chat!');
             
-            // Send success data to bot
             sendTelegramData({
-              action: 'file_processed_success',
+              action: 'file_sent_success',
               artist: artist,
               album: album,
-              filename: filename,
-              original_filename: mp3File.name,
-              file_size: blob.size,
+              filename: processedFilename,
               user_id: user?.id,
               timestamp: new Date().toISOString()
             });
@@ -186,21 +226,17 @@ const Mp3MetadataEditor = () => {
           }
           
         } catch (error) {
-          console.error('Processing error:', error);
+          console.error('Download error:', error);
           const errorMessage = `❌ Error: ${error.message}`;
           setStatus(errorMessage);
           showAlert(errorMessage);
           
-          // Send error data to bot
           sendTelegramData({
-            action: 'file_processed_error',
+            action: 'file_sent_error',
             error: error.message,
             user_id: user?.id,
             timestamp: new Date().toISOString()
           });
-        } finally {
-          setIsProcessing(false);
-          setProcessingStep('');
         }
       }
     );
@@ -215,6 +251,8 @@ const Mp3MetadataEditor = () => {
         setAlbum('');
         setOriginalArtist('');
         setOriginalAlbum('');
+        setProcessedFile(null);
+        setProcessedFilename('');
         setStatus('');
         
         sendTelegramData({
@@ -258,14 +296,36 @@ const Mp3MetadataEditor = () => {
         
         <StatusMessage status={status} />
         
-        <ActionButtons 
-          mp3File={mp3File}
-          isProcessing={isProcessing}
-          librariesLoaded={librariesLoaded}
-          onProcess={processFile}
-          onReset={resetAll}
-          buttonText="🎵 Process & Send to Chat"
-        />
+        {/* Updated Action Buttons with Download */}
+        <div className="space-y-3 mb-6">
+          <button
+            onClick={processFile}
+            disabled={!mp3File || isProcessing || !librariesLoaded}
+            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 
+                     text-white font-medium py-3 px-4 rounded-lg transition-colors"
+          >
+            {isProcessing ? 'Processing...' : '🎵 Process MP3'}
+          </button>
+          
+          {processedFile && (
+            <button
+              onClick={downloadFile}
+              className="w-full bg-green-500 hover:bg-green-600 
+                       text-white font-medium py-3 px-4 rounded-lg transition-colors"
+            >
+              📤 Send to Telegram Chat
+            </button>
+          )}
+          
+          <button
+            onClick={resetAll}
+            disabled={isProcessing}
+            className="w-full bg-red-500 hover:bg-red-600 disabled:bg-gray-300 
+                     text-white font-medium py-3 px-4 rounded-lg transition-colors"
+          >
+            🗑️ Reset All
+          </button>
+        </div>
         
         <Instructions isTelegramMode={true} />
         
