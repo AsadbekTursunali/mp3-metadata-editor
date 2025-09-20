@@ -7,6 +7,7 @@ import AlbumEditor from './AlbumEditor';
 import StatusMessage from './StatusMessage';
 import ActionButtons from './ActionButtons';
 import Instructions from './Instructions';
+import ProcessingModal from './ProcessingModal';
 import { useTelegramApp } from '../hooks/useTelegramApp';
 import { useLibraryLoader } from '../hooks/useLibraryLoader';
 
@@ -19,10 +20,18 @@ const Mp3MetadataEditor = () => {
   const [originalArtist, setOriginalArtist] = useState('');
   const [originalAlbum, setOriginalAlbum] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStep, setProcessingStep] = useState('');
   const [status, setStatus] = useState('');
 
   // Custom hooks
-  const { isTelegramApp, sendTelegramData } = useTelegramApp();
+  const { 
+    isTelegramApp, 
+    user, 
+    sendTelegramData, 
+    sendFileToBot, 
+    showAlert, 
+    showConfirm 
+  } = useTelegramApp();
   const { librariesLoaded } = useLibraryLoader();
 
   const handleMp3Upload = async (file) => {
@@ -62,7 +71,8 @@ const Mp3MetadataEditor = () => {
         sendTelegramData({
           action: 'file_uploaded',
           filename: file.name,
-          size: file.size
+          size: file.size,
+          user_id: user?.id
         });
       } catch (error) {
         console.error('Error reading metadata:', error);
@@ -85,102 +95,133 @@ const Mp3MetadataEditor = () => {
   const processFile = async () => {
     if (!mp3File) {
       setStatus('Please upload an MP3 file first');
+      showAlert('Please upload an MP3 file first');
       return;
     }
 
     if (!librariesLoaded) {
       setStatus('Please wait for libraries to load, then try again');
+      showAlert('Please wait for libraries to load, then try again');
       return;
     }
 
-    setIsProcessing(true);
-    setStatus('Processing file...');
+    // Confirm before processing
+    showConfirm(
+      `Process and send "${mp3File.name}" to your Telegram chat?`,
+      async (confirmed) => {
+        if (!confirmed) return;
 
-    try {
-      if (!window.ID3Writer) {
-        throw new Error('ID3Writer library not loaded');
-      }
+        setIsProcessing(true);
+        setStatus('Processing file...');
 
-      const arrayBuffer = await mp3File.arrayBuffer();
-      const writer = new window.ID3Writer(arrayBuffer);
-      
-      if (artist.trim()) {
-        writer.setFrame('TPE1', [artist.trim()]);
-      }
-      
-      if (album.trim()) {
-        writer.setFrame('TALB', album.trim());
-      }
-      
-      if (coverImage) {
-        const imageBuffer = await coverImage.arrayBuffer();
-        const imageUint8Array = new Uint8Array(imageBuffer);
-        writer.setFrame('APIC', {
-          type: 3,
-          data: imageUint8Array,
-          description: 'Cover',
-          useUnicodeEncoding: false
-        });
-      }
-      
-      writer.addTag();
-      const taggedSongBuffer = writer.getBlob();
-      const blob = new Blob([taggedSongBuffer], { type: 'audio/mpeg' });
-      
-      const filename = `${artist || 'Unknown Artist'} - ${album || 'Unknown Album'}.mp3`;
-      
-      if (window.saveAs) {
-        window.saveAs(blob, filename);
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-      
-      setStatus('File processed and downloaded successfully!');
-      
-      sendTelegramData({
-        action: 'file_processed',
-        artist: artist,
-        album: album,
-        original_filename: mp3File.name,
-        success: true
-      });
+        try {
+          // Step 1: Check ID3Writer
+          setProcessingStep('Initializing audio processor...');
+          if (!window.ID3Writer) {
+            throw new Error('ID3Writer library not loaded');
+          }
 
-      if (isTelegramApp && window.Telegram?.WebApp) {
-        window.Telegram.WebApp.showAlert('MP3 file processed successfully!');
+          // Step 2: Read file
+          setProcessingStep('Reading MP3 file...');
+          const arrayBuffer = await mp3File.arrayBuffer();
+          const writer = new window.ID3Writer(arrayBuffer);
+          
+          // Step 3: Set metadata
+          setProcessingStep('Writing metadata...');
+          if (artist.trim()) {
+            writer.setFrame('TPE1', [artist.trim()]);
+          }
+          
+          if (album.trim()) {
+            writer.setFrame('TALB', album.trim());
+          }
+          
+          // Step 4: Process cover image
+          if (coverImage) {
+            setProcessingStep('Processing cover image...');
+            const imageBuffer = await coverImage.arrayBuffer();
+            const imageUint8Array = new Uint8Array(imageBuffer);
+            writer.setFrame('APIC', {
+              type: 3,
+              data: imageUint8Array,
+              description: 'Cover',
+              useUnicodeEncoding: false
+            });
+          }
+          
+          // Step 5: Generate final file
+          setProcessingStep('Generating final MP3...');
+          writer.addTag();
+          const taggedSongBuffer = writer.getBlob();
+          const blob = new Blob([taggedSongBuffer], { type: 'audio/mpeg' });
+          
+          // Step 6: Prepare filename
+          const filename = `${artist || 'Unknown Artist'} - ${album || 'Unknown Album'}.mp3`;
+          
+          // Step 7: Send to Telegram
+          setProcessingStep('Sending to Telegram...');
+          const result = await sendFileToBot(blob, filename, {
+            artist: artist,
+            album: album,
+            originalFilename: mp3File.name
+          });
+
+          if (result.success) {
+            setStatus('✅ File processed and sent to Telegram successfully!');
+            showAlert('🎵 Your processed MP3 has been sent to the chat!');
+            
+            // Send success data to bot
+            sendTelegramData({
+              action: 'file_processed_success',
+              artist: artist,
+              album: album,
+              filename: filename,
+              original_filename: mp3File.name,
+              file_size: blob.size,
+              user_id: user?.id,
+              timestamp: new Date().toISOString()
+            });
+          } else {
+            throw new Error(result.message || 'Failed to send file');
+          }
+          
+        } catch (error) {
+          console.error('Processing error:', error);
+          const errorMessage = `❌ Error: ${error.message}`;
+          setStatus(errorMessage);
+          showAlert(errorMessage);
+          
+          // Send error data to bot
+          sendTelegramData({
+            action: 'file_processed_error',
+            error: error.message,
+            user_id: user?.id,
+            timestamp: new Date().toISOString()
+          });
+        } finally {
+          setIsProcessing(false);
+          setProcessingStep('');
+        }
       }
-      
-    } catch (error) {
-      console.error('Processing error:', error);
-      setStatus('Error processing file: ' + error.message);
-      
-      sendTelegramData({
-        action: 'file_processed',
-        success: false,
-        error: error.message
-      });
-    } finally {
-      setIsProcessing(false);
-    }
+    );
   };
 
   const resetAll = () => {
-    setMp3File(null);
-    setCoverImage(null);
-    setArtist('');
-    setAlbum('');
-    setOriginalArtist('');
-    setOriginalAlbum('');
-    setStatus('');
-    
-    sendTelegramData({
-      action: 'reset_form'
+    showConfirm('Clear all data?', (confirmed) => {
+      if (confirmed) {
+        setMp3File(null);
+        setCoverImage(null);
+        setArtist('');
+        setAlbum('');
+        setOriginalArtist('');
+        setOriginalAlbum('');
+        setStatus('');
+        
+        sendTelegramData({
+          action: 'reset_form',
+          user_id: user?.id
+        });
+      }
     });
   };
 
@@ -190,6 +231,7 @@ const Mp3MetadataEditor = () => {
         <Header 
           isTelegramApp={isTelegramApp} 
           librariesLoaded={librariesLoaded} 
+          user={user}
         />
         
         <FileUpload 
@@ -222,9 +264,16 @@ const Mp3MetadataEditor = () => {
           librariesLoaded={librariesLoaded}
           onProcess={processFile}
           onReset={resetAll}
+          buttonText="🎵 Process & Send to Chat"
         />
         
-        <Instructions />
+        <Instructions isTelegramMode={true} />
+        
+        {/* Processing Modal */}
+        <ProcessingModal 
+          isOpen={isProcessing} 
+          step={processingStep}
+        />
       </div>
     </div>
   );
