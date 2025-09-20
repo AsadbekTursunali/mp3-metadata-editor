@@ -1,7 +1,7 @@
-// index.js
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
+const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 
@@ -16,15 +16,16 @@ if (!token || !webAppUrl) {
 const bot = new TelegramBot(token, { polling: true });
 const app = express();
 
-app.use(express.json({ limit: '50mb' }));
+// Fayl yuklash uchun multer sozlamalari
+const upload = multer({ dest: path.join(__dirname, "temp") });
 
-// Bot komandalarini o‘rnatish
+// Bot komandalarini sozlash
 bot.setMyCommands([
   { command: 'start', description: '🎵 Start MP3 Editor' },
   { command: 'help', description: '❓ Get help' }
 ]);
 
-// /start va /help komandalarini qayta ishlash
+// /start komandasi
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -33,10 +34,10 @@ bot.on('message', (msg) => {
     const welcomeMessage = `🎵 *MP3 Metadata Editor*
 
 Xush kelibsiz! Bu bot yordamida siz:
-- MP3 faylni tahrirlashingiz mumkin
+- MP3 faylni tahrirlash
 - Artist va Album nomini o‘zgartirish
-- Yangi cover art qo‘shish
-- Tahrirlangan faylni bevosita shu chatda olish
+- Yangi cover qo‘shish
+- Tahrirlangan faylni shu chatda olish
 
 Quyidagi tugmani bosing va boshlang:`;
 
@@ -49,107 +50,60 @@ Quyidagi tugmani bosing va boshlang:`;
       }
     });
   }
-
-  if (text === '/help') {
-    const helpMessage = `❓ *Yordam*
-
-1️⃣ Tugmani bosing: "Open MP3 Editor"  
-2️⃣ MP3 faylingizni yuklang  
-3️⃣ Artist/Album/Cover ma’lumotlarini o‘zgartiring  
-4️⃣ "Process & Send to Chat" tugmasini bosing  
-5️⃣ Tahrirlangan faylni shu yerda oling 🚀`;
-
-    bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
-  }
 });
 
-// WebApp’dan kelgan ma’lumotlarni ishlash
+// WebApp’dan faqat metadata keladi
 bot.on('web_app_data', async (msg) => {
   const chatId = msg.chat.id;
 
   try {
     const data = JSON.parse(msg.web_app_data.data);
-    console.log('📩 WebApp data:', data.action);
+    console.log("📩 WebApp data:", data);
 
-    switch (data.action) {
-      case 'file_uploaded':
-        bot.sendMessage(chatId, `✅ Fayl yuklandi: *${data.filename}*\nHajmi: ${(data.size / 1024 / 1024).toFixed(2)} MB`, {
-          parse_mode: 'Markdown'
-        });
-        break;
-
-      case 'send_processed_file':
-        await handleProcessedFile(chatId, data);
-        break;
-
-      case 'file_processed_success':
-        bot.sendMessage(chatId, `🎉 Muvaffaqiyatli tahrirlandi: *${data.filename}*`, {
-          parse_mode: 'Markdown'
-        });
-        break;
-
-      case 'file_processed_error':
-        bot.sendMessage(chatId, `❌ Xatolik: ${data.error}`, {
-          parse_mode: 'Markdown'
-        });
-        break;
-
-      case 'reset_form':
-        bot.sendMessage(chatId, '🔄 Yangi fayl uchun tayyor!');
-        break;
+    if (data.action === "file_uploaded") {
+      bot.sendMessage(chatId, `✅ Fayl yuklandi: *${data.filename}*`, { parse_mode: "Markdown" });
     }
-  } catch (error) {
-    console.error('❌ WebApp data xatosi:', error);
-    bot.sendMessage(chatId, '❌ So‘rovni qayta ishlashda xato yuz berdi.');
+
+  } catch (err) {
+    console.error("❌ WebApp data xatosi:", err);
+    bot.sendMessage(chatId, "❌ Ma'lumotni qayta ishlashda xato.");
   }
 });
 
-// MP3 faylni yuborish funksiyasi
-async function handleProcessedFile(chatId, data) {
+// Express upload endpoint
+app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-    console.log(`▶️ Fayl tayyorlanmoqda: ${data.file.filename}`);
+    const metadata = JSON.parse(req.body.metadata || "{}");
+    const filePath = req.file.path;
+    const chatId = process.env.OWNER_CHAT_ID; // Agar chatId ni oldindan bilsangiz
 
-    const audioBuffer = Buffer.from(data.file.data, 'base64');
-
-    const tempFilePath = path.join(__dirname, 'temp', data.file.filename);
-    if (!fs.existsSync(path.dirname(tempFilePath))) {
-      fs.mkdirSync(path.dirname(tempFilePath), { recursive: true });
+    if (!chatId) {
+      return res.status(400).json({ success: false, error: "Chat ID mavjud emas" });
     }
-    fs.writeFileSync(tempFilePath, audioBuffer);
 
-    const caption = `🎵 *Your Edited MP3*  
+    const caption = `🎵 *Edited MP3*  
 
-👤 *Artist:* ${data.metadata.artist}  
-💽 *Album:* ${data.metadata.album}  
-📁 *Original:* ${data.metadata.originalFilename}  
-📊 *Size:* ${(data.file.size / 1024 / 1024).toFixed(2)} MB  
+👤 *Artist:* ${metadata.artist || "Unknown"}  
+💽 *Album:* ${metadata.album || "Unknown"}  
+📁 *Original:* ${metadata.originalFilename || "unknown.mp3"}`;
 
-_Processed with MP3 Editor Bot_ 🤖`;
-
-    await bot.sendAudio(chatId, fs.createReadStream(tempFilePath), {
+    await bot.sendAudio(chatId, fs.createReadStream(filePath), {
       caption,
-      parse_mode: 'Markdown',
-      title: `${data.metadata.artist} - ${data.metadata.album}`,
-      performer: data.metadata.artist
+      parse_mode: "Markdown",
+      title: `${metadata.artist} - ${metadata.album}`,
+      performer: metadata.artist
     });
 
-    fs.unlinkSync(tempFilePath);
-    console.log(`✅ Fayl yuborildi: ${data.file.filename}`);
-
+    fs.unlinkSync(filePath); // vaqtinchalik faylni o‘chirish
+    res.json({ success: true });
   } catch (error) {
-    console.error('❌ Fayl yuborishda xato:', error);
-    bot.sendMessage(chatId, '❌ Faylni yuborib bo‘lmadi. Qayta urinib ko‘ring.');
+    console.error("❌ Upload error:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
-}
+});
 
-// Express health check
+// Health check
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server ishlayapti: ${PORT}`);
 });
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-console.log('🤖 MP3 Editor Bot ishga tushdi...');
